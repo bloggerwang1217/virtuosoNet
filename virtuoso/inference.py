@@ -5,7 +5,7 @@ import torch
 import copy
 from math import log
 import csv
-import pretty_midi
+import types
 from sklearn.cluster import KMeans
 
 from .constants import *
@@ -138,7 +138,7 @@ def save_model_output_as_midi(model_outputs, save_path, score, output_keys, stat
             writer = csv.writer(f, delimiter=',')
             writer.writerow([f'{el:.3f}' for el in nth_times])
         # add midi clock channel
-        clock_notes = [pretty_midi.Note(velocity=64, pitch=64, start=el, end=el+0.01) for el in nth_times]
+        clock_notes = [types.SimpleNamespace(velocity=64, pitch=64, start=el, end=el+0.01) for el in nth_times]
     else:
         clock_notes = None
     if save_csv:
@@ -326,7 +326,7 @@ class ModelToMidiDecoder:
             writer = csv.writer(f, delimiter=',')
             writer.writerow([f'{el:.3f}' for el in nth_times])
         # add midi clock channel
-        clock_notes = [pretty_midi.Note(velocity=64, pitch=64, start=el, end=el+0.01) for el in nth_times]
+        clock_notes = [types.SimpleNamespace(velocity=64, pitch=64, start=el, end=el+0.01) for el in nth_times]
     else:
         clock_notes = None
     if self.save_csv:

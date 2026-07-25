@@ -22,7 +22,7 @@ def handle_args(args):
     net_param = config.nn_params
     net_param.input_size = get_input_size_from_training_data(args)
   else:
-    net_param = torch.load(str(args.checkpoint), map_location='cpu')['network_params']
+    net_param = torch.load(str(args.checkpoint), map_location='cpu', weights_only=False)['network_params']
     args.yml_path = next(Path(args.checkpoint).parent.glob('*.yml'))
     config = read_model_setting(args.yml_path)
   if 'isgn' not in net_param.performance_decoder_name.lower():
@@ -38,7 +38,7 @@ def handle_args(args):
   if args.session_mode == 'train':
     data_stats = load_dat(Path(args.data_path)/"stat.pkl")
   else:
-    data_stats = torch.load(str(args.checkpoint), map_location='cpu')['stats']
+    data_stats = torch.load(str(args.checkpoint), map_location='cpu', weights_only=False)['stats']
   
   return args, net_param, data_stats
 
@@ -64,7 +64,7 @@ def load_dat(path):
 def load_weight(model, checkpoint_path):
     if not isinstance(checkpoint_path, str):
         checkpoint_path = str(checkpoint_path)
-    checkpoint = torch.load(checkpoint_path,  map_location='cpu')
+    checkpoint = torch.load(checkpoint_path,  map_location='cpu', weights_only=False)
     model.load_state_dict(checkpoint['state_dict'])
     model.stats = checkpoint['stats']
     model.model_code = checkpoint['model_code']

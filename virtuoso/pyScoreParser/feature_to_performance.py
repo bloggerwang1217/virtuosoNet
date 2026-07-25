@@ -1,5 +1,4 @@
 import copy
-import pretty_midi
 
 from .xml_midi_matching import make_available_note_feature_list
 from .utils import get_item_by_xml_position

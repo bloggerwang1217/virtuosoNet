@@ -109,7 +109,7 @@ class Notations(object):
         self.is_mordent = True
       if tag == 'wavy-line':
         type = child.attrib['type']
-        number = child.attrib['number']
+        number = child.attrib.get('number', '1')  # MusicXML default per spec
         self.wavy_line = WavyLine(type, number)
 
   def _parse_slur(self, xml_slurs):

@@ -1,6 +1,6 @@
 from .utils import binary_index
 
-import pretty_midi
+import types
 THRESHOLD = 64
 OVERLAP_THR = 0.03
 BARELY_OFF = 20
@@ -46,7 +46,7 @@ def predicted_pedals_to_midi_pedals(xml_notes, eps=0.03):
 def xml_pedals_to_midi_pedals(xml_pedals):
     midi_pedals = []
     for pedal in xml_pedals:
-        midi_pedal = pretty_midi.ControlChange(number=pedal.number, value=pedal.value, time=pedal.time)
+        midi_pedal = types.SimpleNamespace(number=pedal.number, value=pedal.value, time=pedal.time)
         midi_pedals.append(midi_pedal)
     return midi_pedals
 

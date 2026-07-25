@@ -2,13 +2,124 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import pretty_midi
+import mido
+import types
 import warnings
 import numpy as np
 import copy
 
 
 ONSET_DURATION = 0.032
+
+# --- mido-backed replacement for the pretty_midi surface that
+# save_midi_notes_as_piano_midi() needs (Note/ControlChange objects are
+# plain attribute bags elsewhere in this package; this only has to cover
+# Instrument + PrettyMIDI.write). Other functions in this file
+# (to_midi_zero, mid2piano_roll, save_note_pedal_to_CC,
+# save_midi_notes_as_piano_midi_without_pedal, elongate_offset_by_pedal,
+# read_sustain_pedal) still reference pretty_midi and are not usable —
+# they belong to VirtuosoNet's training-data-prep tooling, not the
+# --session_mode=inference path this repo runs.
+_MIDI_TICKS_PER_BEAT = 480
+_MIDI_REFERENCE_TEMPO = mido.bpm2tempo(120)
+
+# General MIDI 1 sound set (program numbers are a fixed public spec, not
+# a pretty_midi invention). Only 'Acoustic Grand Piano' is exercised here.
+_GM_INSTRUMENTS = [
+    "Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano",
+    "Honky-tonk Piano", "Electric Piano 1", "Electric Piano 2", "Harpsichord",
+    "Clavinet", "Celesta", "Glockenspiel", "Music Box", "Vibraphone",
+    "Marimba", "Xylophone", "Tubular Bells", "Dulcimer", "Drawbar Organ",
+    "Percussive Organ", "Rock Organ", "Church Organ", "Reed Organ",
+    "Accordion", "Harmonica", "Tango Accordion", "Acoustic Guitar (nylon)",
+    "Acoustic Guitar (steel)", "Electric Guitar (jazz)",
+    "Electric Guitar (clean)", "Electric Guitar (muted)",
+    "Overdriven Guitar", "Distortion Guitar", "Guitar Harmonics",
+    "Acoustic Bass", "Electric Bass (finger)", "Electric Bass (pick)",
+    "Fretless Bass", "Slap Bass 1", "Slap Bass 2", "Synth Bass 1",
+    "Synth Bass 2", "Violin", "Viola", "Cello", "Contrabass",
+    "Tremolo Strings", "Pizzicato Strings", "Orchestral Harp", "Timpani",
+    "String Ensemble 1", "String Ensemble 2", "Synth Strings 1",
+    "Synth Strings 2", "Choir Aahs", "Voice Oohs", "Synth Choir",
+    "Orchestra Hit", "Trumpet", "Trombone", "Tuba", "Muted Trumpet",
+    "French Horn", "Brass Section", "Synth Brass 1", "Synth Brass 2",
+    "Soprano Sax", "Alto Sax", "Tenor Sax", "Baritone Sax", "Oboe",
+    "English Horn", "Bassoon", "Clarinet", "Piccolo", "Flute", "Recorder",
+    "Pan Flute", "Blown Bottle", "Shakuhachi", "Whistle", "Ocarina",
+    "Lead 1 (square)", "Lead 2 (sawtooth)", "Lead 3 (calliope)",
+    "Lead 4 (chiff)", "Lead 5 (charang)", "Lead 6 (voice)",
+    "Lead 7 (fifths)", "Lead 8 (bass + lead)", "Pad 1 (new age)",
+    "Pad 2 (warm)", "Pad 3 (polysynth)", "Pad 4 (choir)", "Pad 5 (bowed)",
+    "Pad 6 (metallic)", "Pad 7 (halo)", "Pad 8 (sweep)", "FX 1 (rain)",
+    "FX 2 (soundtrack)", "FX 3 (crystal)", "FX 4 (atmosphere)",
+    "FX 5 (brightness)", "FX 6 (goblins)", "FX 7 (echoes)", "FX 8 (sci-fi)",
+    "Sitar", "Banjo", "Shamisen", "Koto", "Kalimba", "Bag pipe", "Fiddle",
+    "Shanai", "Tinkle Bell", "Agogo", "Steel Drums", "Woodblock", "Taiko Drum",
+    "Melodic Tom", "Synth Drum", "Reverse Cymbal", "Guitar Fret Noise",
+    "Breath Noise", "Seashore", "Bird Tweet", "Telephone Ring",
+    "Helicopter", "Applause", "Gunshot",
+]
+_GM_NAME_TO_PROGRAM = {name: i for i, name in enumerate(_GM_INSTRUMENTS)}
+
+
+def instrument_name_to_program(instrument_name):
+    return _GM_NAME_TO_PROGRAM[instrument_name]
+
+
+class _MidoInstrument:
+    def __init__(self, program=0):
+        self.program = program
+        self.notes = []
+        self.control_changes = []
+
+
+def _channel_for_instrument_index(i):
+    # MIDI channel 9 (0-indexed) is reserved for percussion; step over it,
+    # matching pretty_midi's own channel-assignment convention.
+    return i if i < 9 else i + 1
+
+
+def _write_midi(instruments, output_name):
+    """instruments: list of _MidoInstrument, each holding Note-like objects
+    (.pitch/.velocity/.start/.end, seconds) and ControlChange-like objects
+    (.number/.value/.time, seconds)."""
+    midi_file = mido.MidiFile(type=1, ticks_per_beat=_MIDI_TICKS_PER_BEAT)
+
+    for i, instrument in enumerate(instruments):
+        channel = _channel_for_instrument_index(i)
+        track = mido.MidiTrack()
+        midi_file.tracks.append(track)
+        if i == 0:
+            track.append(mido.MetaMessage(
+                "set_tempo", tempo=_MIDI_REFERENCE_TEMPO, time=0))
+        track.append(mido.Message(
+            "program_change", program=instrument.program,
+            channel=channel, time=0))
+
+        events = []  # (time_sec, priority, mido.Message-without-time)
+        for note in instrument.notes:
+            events.append((note.start, 2, mido.Message(
+                "note_on", note=int(round(note.pitch)),
+                velocity=int(note.velocity), channel=channel)))
+            events.append((note.end, 0, mido.Message(
+                "note_off", note=int(round(note.pitch)),
+                velocity=0, channel=channel)))
+        for cc in instrument.control_changes:
+            events.append((cc.time, 1, mido.Message(
+                "control_change", control=cc.number,
+                value=int(cc.value), channel=channel)))
+
+        events.sort(key=lambda e: (e[0], e[1]))
+
+        prev_sec = 0.0
+        for time_sec, _priority, msg in events:
+            time_sec = max(time_sec, prev_sec)
+            delta_ticks = round(mido.second2tick(
+                time_sec - prev_sec, _MIDI_TICKS_PER_BEAT, _MIDI_REFERENCE_TEMPO))
+            track.append(msg.copy(time=delta_ticks))
+            prev_sec = time_sec
+
+    midi_file.save(str(output_name))
 
 
 class SustainPedal:
@@ -466,15 +577,15 @@ def save_midi_notes_as_piano_midi(midi_notes, midi_pedals, output_name, bool_ped
     """
     if not isinstance(output_name, str):
         output_name = str(output_name)
-    piano_midi = pretty_midi.PrettyMIDI()
-    piano_program = pretty_midi.instrument_name_to_program('Acoustic Grand Piano')
+    instruments = []
+    piano_program = instrument_name_to_program('Acoustic Grand Piano')
 
     if isinstance(midi_notes[0], list): #multi instruments
         num_instruments = len(midi_notes)
         for i in range(num_instruments):
             if len(midi_notes[i]) == 0:
                 continue
-            piano = pretty_midi.Instrument(program=piano_program)
+            piano = _MidoInstrument(program=piano_program)
             for note in midi_notes[i]:
                 piano.notes.append(note)
             last_note_end = midi_notes[i][-1].end
@@ -482,15 +593,15 @@ def save_midi_notes_as_piano_midi(midi_notes, midi_pedals, output_name, bool_ped
                 for pedal in midi_pedals[i]:
                     if pedal.value < 64:
                         pedal.value = 0
-            last_pedal = pretty_midi.ControlChange(number=64, value=0, time=last_note_end + 3)
+            last_pedal = types.SimpleNamespace(number=64, value=0, time=last_note_end + 3)
             midi_pedals[i].append(last_pedal)
             piano.control_changes = midi_pedals[i]
-            piano_midi.instruments.append(piano)
+            instruments.append(piano)
 
         # last_note_end = max([x[-1].end for x in midi_notes])
 
     else:
-        piano = pretty_midi.Instrument(program=piano_program)
+        piano = _MidoInstrument(program=piano_program)
         # pedal_threhsold = 60
         # pedal_time_margin = 0.2
         for note in midi_notes:
@@ -511,7 +622,7 @@ def save_midi_notes_as_piano_midi(midi_notes, midi_pedals, output_name, bool_ped
                     break
         for idx in sorted(delete_idx_list, reverse=True):
             del piano.notes[idx]
-        piano_midi.instruments.append(piano)
+        instruments.append(piano)
 
         # piano_midi = midi_utils.save_note_pedal_to_CC(piano_midi)
         if bool_pedal:
@@ -521,17 +632,17 @@ def save_midi_notes_as_piano_midi(midi_notes, midi_pedals, output_name, bool_ped
 
         last_note_end = midi_notes[-1].end
         # end pedal 3 seconds after the last note
-        last_pedal = pretty_midi.ControlChange(number=64, value=0, time=last_note_end + 3)
+        last_pedal = types.SimpleNamespace(number=64, value=0, time=last_note_end + 3)
         midi_pedals.append(last_pedal)
 
-        piano_midi.instruments[0].control_changes = midi_pedals
+        instruments[0].control_changes = midi_pedals
 
 
     if tempo_clock:
-        piano = pretty_midi.Instrument(program=piano_program)
+        piano = _MidoInstrument(program=piano_program)
         for note in tempo_clock:
             piano.notes.append(note)
-        piano_midi.instruments.append(piano)
+        instruments.append(piano)
     #
     # if disklavier:
     #     pedals = piano_midi.instruments[0].control_changes
@@ -569,7 +680,7 @@ def save_midi_notes_as_piano_midi(midi_notes, midi_pedals, output_name, bool_ped
     #     for pedal in pedal_remove_candidate:
     #         pedals.remove(pedal)
 
-    piano_midi.write(output_name)
+    _write_midi(instruments, output_name)
 
 def save_midi_notes_as_piano_midi_without_pedal(midi_notes, output_name):
     """ Generate midi file by using received midi notes and midi pedals

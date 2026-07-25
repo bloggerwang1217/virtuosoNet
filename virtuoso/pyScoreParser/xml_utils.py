@@ -10,7 +10,7 @@ call in feature_extraction.py and data_class.py
 
 get xml information like note information to generate or modify xml information
 """
-import pretty_midi
+import types
 import copy
 
 from . import xml_direction_encoding as dir_enc
@@ -533,7 +533,7 @@ def xml_notes_to_midi(xml_notes, multi_instruments=False, ignore_overlapped=True
         elif note.note_duration.seconds > 10:
             end = start + 10
         velocity = round(min(max(note.velocity,0),127))
-        midi_note = pretty_midi.Note(velocity=velocity, pitch=pitch, start=start, end=end)
+        midi_note = types.SimpleNamespace(velocity=velocity, pitch=pitch, start=start, end=end)
         midi_note.channel = note.voice // 10
         midi_note.xml_idx = i
         
