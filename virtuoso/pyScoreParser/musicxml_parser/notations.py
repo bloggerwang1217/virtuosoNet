@@ -114,7 +114,7 @@ class Notations(object):
 
   def _parse_slur(self, xml_slurs):
     type = xml_slurs.attrib['type']
-    number = xml_slurs.attrib['number']
+    number = xml_slurs.attrib.get('number', '1')  # MusicXML default per spec
     self.slurs.append(Slur(type, number))
 
 
