@@ -100,6 +100,18 @@ def save_model_output_as_midi(model_outputs, save_path, score, output_keys, stat
         output_features['velocity'] = (output_features['velocity'] - mean_vel) * velocity_multiplier + mean_vel
 
     xml_notes, tempos = apply_tempo_perform_features(score, output_features, start_time=0.5, predicted=True, return_tempo=True)
+    # The tempo builder starts at the first performed note.  Preserve any
+    # notated opening rests by moving the performance forward far enough
+    # that score position zero still maps to the model's 0.5 s lead-in.
+    if tempos and tempos[0].xml_position > 0:
+        divisions = xml_notes[0].state_fixed.divisions
+        leading_seconds = (
+            tempos[0].xml_position / divisions / tempos[0].qpm * 60)
+        for tempo in tempos:
+            tempo.time_position += leading_seconds
+            tempo.end_time += leading_seconds
+        for note in xml_notes:
+            note.note_duration.time_position += leading_seconds
     # if save_cluster:
     #     cluster = cluster_note_embeddings(model_outputs)
     #     for note, cluster_id in zip(xml_notes, cluster):
@@ -137,6 +149,21 @@ def save_model_output_as_midi(model_outputs, save_path, score, output_keys, stat
         with open(f'{save_path}_beat.csv', 'w') as f:
             writer = csv.writer(f, delimiter=',')
             writer.writerow([f'{el:.3f}' for el in nth_times])
+
+        # Preserve the clock that actually drove the performance.  The sampled
+        # beat CSV is useful for the audible clock track, but it discards score
+        # positions and rounds times to milliseconds.  Downstream alignment
+        # needs the exact piecewise-constant tempo segments instead.
+        divisions = xml_notes[0].state_fixed.divisions
+        with open(f'{save_path}_tempo.csv', 'w') as f:
+            writer = csv.writer(f, delimiter=',')
+            writer.writerow(['quarter_offset', 'seconds', 'qpm'])
+            for tempo in tempos:
+                writer.writerow([
+                    tempo.xml_position / divisions,
+                    tempo.time_position,
+                    tempo.qpm,
+                ])
         # add midi clock channel
         clock_notes = [types.SimpleNamespace(velocity=64, pitch=64, start=el, end=el+0.01) for el in nth_times]
     else:
