@@ -112,12 +112,16 @@ def _write_midi(instruments, output_name):
         events.sort(key=lambda e: (e[0], e[1]))
 
         prev_sec = 0.0
+        previous_tick = 0
         for time_sec, _priority, msg in events:
             time_sec = max(time_sec, prev_sec)
-            delta_ticks = round(mido.second2tick(
-                time_sec - prev_sec, _MIDI_TICKS_PER_BEAT, _MIDI_REFERENCE_TEMPO))
+            # Absolute quantization keeps rounding error from accumulating.
+            absolute_tick = round(mido.second2tick(
+                time_sec, _MIDI_TICKS_PER_BEAT, _MIDI_REFERENCE_TEMPO))
+            delta_ticks = absolute_tick - previous_tick
             track.append(msg.copy(time=delta_ticks))
             prev_sec = time_sec
+            previous_tick = absolute_tick
 
     midi_file.save(str(output_name))
 
